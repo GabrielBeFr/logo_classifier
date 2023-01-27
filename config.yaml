@@ -1,0 +1,9 @@
+---
+  dataloader:
+    loader_batch_size: 15
+    loader_num_threads: 64
+    transform: 'identity_transform'
+  model:
+    model_name: 'nn'
+...
+  

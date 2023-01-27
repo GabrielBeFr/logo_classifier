@@ -1,5 +1,6 @@
 import torch
 import wandb
+from utils import get_config
 
 def train():
     # define device
@@ -27,5 +28,7 @@ def train():
 
 if __name__ == '__main__':
     wandb.init(project="test-classifier")
+
+    config = get_config("config.yaml")
 
     train()
