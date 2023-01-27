@@ -1,4 +1,5 @@
 import torch
+import wandb
 
 def train():
     # define device
@@ -25,4 +26,6 @@ def train():
 
 
 if __name__ == '__main__':
+    wandb.init(project="test-classifier")
+
     train()
