@@ -2,70 +2,59 @@ import torch.utils.data as t_data
 import h5py
 from pathlib import Path
 from typing import List, Any
+import tqdm
+from utils import get_offset
 
 class LogoDataset(t_data.Dataset): 
     '''Class for main Dataset Classes''' 
-    def __init__(self, hdf5_file, transform):
+    def __init__(self, hdf5_file: Path, transforms: List[str]):
         self.file = h5py.File(hdf5_file, 'r')
-        self.embeddings = self.file['embedding']
-        self.ids = self.file['external_id']
-        self.classes = self.file['class']
-        self.transform = transform
+        offset = get_offset(self.file)
+        self.embeddings = self.file['embedding'][:offset]
+        self.ids = self.file['external_id'][:offset]
+        self.classes = self.file['class'][:offset]
+        self.transforms = transforms
         
     def __len__(self):
         return len(self.embeddings)
     
     def __getitem__(self, idx):
-        return self.transform(self.embeddings[idx]), self.classes[idx], self.ids[idx]
+        embedding = self.embeddings[idx]
+        for transform in self.transforms:
+            exec("embedding =" + transform + "(embedding)")
 
-class DatasetTransformer(t_data.Dataset):
+        return embedding, self.classes[idx], self.ids[idx]
 
-    def __init__(self, base_dataset, transform):
-        self.base_dataset = base_dataset
-        self.transform = transform
+def get_datasets(train_path: Path, val_path: Path, test_path: Path, transforms : List[str]):
+    train_dataset = LogoDataset(train_path, transforms)
+    val_dataset = LogoDataset(val_path, transforms)
+    test_dataset = LogoDataset(test_path, transforms)
 
-    def __getitem__(self, index):
-        embedding, classe, id = self.base_dataset[index]
-        return self.transform(embedding), classe, id
-
-    def __len__(self):
-        return len(self.base_dataset)
-
-def transform_datasets(datasets_list: List[LogoDataset], transform):
-    res_list = []
-    for dataset in datasets_list:
-        res_list.append(DatasetTransformer(dataset, transform))
-    return res_list
-
-def get_datasets(data_path: Path, valid_ratio: float, test_ratio: float, transform):
-    complete_dataset = LogoDataset(data_path, transform)
-    nb_train = int((1.0 - valid_ratio - test_ratio)*len(complete_dataset))
-    nb_valid = int(valid_ratio*len(complete_dataset))
-    nb_test = int(test_ratio*len(complete_dataset))
-
-    return t_data.dataset.random_split(complete_dataset, [nb_train, nb_valid, nb_test])
+    return train_dataset, val_dataset, test_dataset
 
 def get_weights(datasets_list: List[LogoDataset], loader_batch_size: int, num_threads: int):
     res_list = []
     for dataset in datasets_list:
         amount_dict = {}
         data_gen = t_data.DataLoader(dataset=dataset, batch_size=loader_batch_size, num_workers=num_threads)
-        for data_batch in data_gen:
+        print("Starting weight generation loop 1")
+        for data_batch in tqdm.tqdm(data_gen):
             class_batch = data_batch[1]
-            for classe in class_batch:
+            for classe in class_batch: 
                 try:
                     amount_dict[str(classe.item())]+=1
                 except KeyError:
-                    amount_dict[str(classe.item())]=0
+                    amount_dict[str(classe.item())]=1
 
         weight_dict = {}
         for classe in amount_dict:
             if amount_dict[classe] == 0:
-                breakpoint()
+                print("there is no class")
             weight_dict[classe] = 1/amount_dict[classe]
 
         weight_list = []
-        for data_batch in data_gen:
+        print("Starting weight generation loop 2")
+        for data_batch in tqdm.tqdm(data_gen):
             class_batch = data_batch[1]
             for classe in class_batch:
                 weight_list.append(weight_dict[str(classe.item())])
@@ -75,18 +64,27 @@ def get_weights(datasets_list: List[LogoDataset], loader_batch_size: int, num_th
     return res_list
 
 
-def get_dataloader(data_path: Path, 
-                valid_ratio: float, 
-                test_ratio: float, 
-                transform,
+def get_dataloader(train_path: Path, 
+                val_path: float, 
+                test_path: float, 
+                transforms: List[str],
                 num_threads: int,
                 loader_batch_size: int,
                 ):
+    """
+    Returns the three dataloaders for training, validation and test.
+    
+    Inputs:
+     train_path: pathlib.Path of the hdf5 train dataset
+     val_path: pathlib.Path of the hdf5 val dataset
+     test_path: pathlib.Path of the hdf5 test dataset
+     transforms: list of strings with the name of functions to use as transforms
+     num_threads: int of the amount of CPU used to run the dataset
+     loader_batch_size: int of the size of batches loaded at the same time by the dataloader
+    """
 
     # get train, val and test datasets
-    train_dataset, valid_dataset, test_dataset = get_datasets(data_path, valid_ratio, test_ratio, transform)
-
-    train_dataset, valid_dataset, test_dataset = transform_datasets([train_dataset, valid_dataset, test_dataset], transform)
+    train_dataset, valid_dataset, test_dataset = get_datasets(train_path, val_path, test_path, transforms)
 
     # define samplers for train, val and test
     train_weights, valid_weights, test_weights = get_weights([train_dataset, valid_dataset, test_dataset], loader_batch_size, num_threads)
@@ -106,6 +104,32 @@ def identity_transform(element: Any):
     return element
 
 if __name__ == '__main__':
-    train_loader, valid_loader, test_loader = get_dataloader(Path("/home/gabriel/off/data/data_file.hdf5"), 0.1, 0.1, identity_transform, 1, 15)
-    for data in train_loader:
-        breakpoint()
+    train_path = Path("/home/gabriel/off/logo_classifier/datasets/train_dataset.hdf5")
+    val_path = Path("/home/gabriel/off/logo_classifier/datasets/val_dataset.hdf5")
+    test_path = Path("/home/gabriel/off/logo_classifier/datasets/test_dataset.hdf5")
+    train_loader, val_loader, test_loader = get_dataloader(train_path, val_path, test_path, ["identity_transform"], 1, 15)
+    
+    import numpy as np
+    train_classes = np.zeros(168)
+    val_classes = np.zeros(168)
+    test_classes = np.zeros(168)
+    print("Starting train_loader")
+    for data in tqdm.tqdm(train_loader):
+        for classe in data[1]:
+            train_classes[classe] += 1
+    print("Starting val_loader")
+    for data in tqdm.tqdm(val_loader):
+        for classe in data[1]:
+            val_classes[classe] += 1
+    print("Starting test_loader")
+    for data in tqdm.tqdm(test_loader):
+        for classe in data[1]:
+            test_classes[classe] += 1
+
+    import matplotlib.pyplot as plt
+    plt.plot(train_classes)
+    plt.show()
+    plt.plot(val_classes)
+    plt.show()
+    plt.plot(test_classes)
+    plt.show()
