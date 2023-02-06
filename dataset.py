@@ -1,9 +1,11 @@
 import torch.utils.data as t_data
+import torch
 import h5py
 from pathlib import Path
 from typing import List, Any
 import tqdm
 from utils import get_offset
+import numpy as np
 
 class LogoDataset(t_data.Dataset): 
     '''Class for main Dataset Classes''' 
@@ -11,7 +13,9 @@ class LogoDataset(t_data.Dataset):
         self.file = h5py.File(hdf5_file, 'r')
         offset = get_offset(self.file)
         self.embeddings = self.file['embedding'][:offset]
-        self.ids = self.file['external_id'][:offset]
+        ids = self.file['external_id'][:offset]
+        assert ids[-1] != 0
+        self.ids = ids
         self.classes = self.file['class'][:offset]
         self.transforms = transforms
         
@@ -22,8 +26,9 @@ class LogoDataset(t_data.Dataset):
         embedding = self.embeddings[idx]
         for transform in self.transforms:
             exec("embedding =" + transform + "(embedding)")
-
-        return embedding, self.classes[idx], self.ids[idx]
+        class_arr = np.zeros(168)
+        class_arr[self.classes[idx]] = 1
+        return embedding, class_arr, self.ids[idx]
 
 def get_datasets(train_path: Path, val_path: Path, test_path: Path, transforms : List[str]):
     train_dataset = LogoDataset(train_path, transforms)
@@ -40,7 +45,8 @@ def get_weights(datasets_list: List[LogoDataset], loader_batch_size: int, num_th
         print("Starting weight generation loop 1")
         for data_batch in tqdm.tqdm(data_gen):
             class_batch = data_batch[1]
-            for classe in class_batch: 
+            for classe in class_batch:
+                classe = torch.where(classe==1)[0]
                 try:
                     amount_dict[str(classe.item())]+=1
                 except KeyError:
@@ -57,6 +63,7 @@ def get_weights(datasets_list: List[LogoDataset], loader_batch_size: int, num_th
         for data_batch in tqdm.tqdm(data_gen):
             class_batch = data_batch[1]
             for classe in class_batch:
+                classe = torch.where(classe==1)[0]
                 weight_list.append(weight_dict[str(classe.item())])
 
         res_list.append(weight_list)
@@ -67,9 +74,10 @@ def get_weights(datasets_list: List[LogoDataset], loader_batch_size: int, num_th
 def get_dataloader(train_path: Path, 
                 val_path: float, 
                 test_path: float, 
-                transforms: List[str],
-                num_threads: int,
-                loader_batch_size: int,
+                transforms: List[str]=[],
+                num_threads: int=6,
+                loader_batch_size: int=32,
+                debugging: bool=False,
                 ):
     """
     Returns the three dataloaders for training, validation and test.
@@ -87,16 +95,20 @@ def get_dataloader(train_path: Path,
     train_dataset, valid_dataset, test_dataset = get_datasets(train_path, val_path, test_path, transforms)
 
     # define samplers for train, val and test
-    train_weights, valid_weights, test_weights = get_weights([train_dataset, valid_dataset, test_dataset], loader_batch_size, num_threads)
+    if debugging:
+        test_weights = get_weights([test_dataset], loader_batch_size, num_threads)
+        test_sampler = t_data.WeightedRandomSampler(weights=test_weights[0], num_samples=len(test_dataset))
+        test_loader = t_data.DataLoader(dataset=test_dataset, batch_size=loader_batch_size, num_workers=num_threads, sampler=test_sampler)
+        return test_loader, test_loader, test_loader
+
+    train_weights = get_weights([train_dataset], loader_batch_size, num_threads)[0]
 
     train_sampler = t_data.WeightedRandomSampler(weights=train_weights, num_samples=len(train_dataset))
-    valid_sampler = t_data.WeightedRandomSampler(weights=valid_weights, num_samples=len(valid_dataset))
-    test_sampler = t_data.WeightedRandomSampler(weights=test_weights, num_samples=len(test_dataset))
 
     # create dataloader for train, val and test
     train_loader = t_data.DataLoader(dataset=train_dataset, batch_size=loader_batch_size, num_workers=num_threads, sampler=train_sampler)
-    valid_loader = t_data.DataLoader(dataset=valid_dataset, batch_size=loader_batch_size, num_workers=num_threads, sampler=valid_sampler)
-    test_loader = t_data.DataLoader(dataset=test_dataset, batch_size=loader_batch_size, num_workers=num_threads, sampler=test_sampler)
+    valid_loader = t_data.DataLoader(dataset=valid_dataset, batch_size=loader_batch_size, num_workers=num_threads)
+    test_loader = t_data.DataLoader(dataset=test_dataset, batch_size=loader_batch_size, num_workers=num_threads)
 
     return train_loader, valid_loader, test_loader
 
@@ -115,6 +127,7 @@ if __name__ == '__main__':
     test_classes = np.zeros(168)
     print("Starting train_loader")
     for data in tqdm.tqdm(train_loader):
+        breakpoint()
         for classe in data[1]:
             train_classes[classe] += 1
     print("Starting val_loader")
