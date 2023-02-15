@@ -9,15 +9,22 @@ import numpy as np
 
 class LogoDataset(t_data.Dataset): 
     '''Class for main Dataset Classes''' 
-    def __init__(self, hdf5_file: Path, transforms: List[str]):
+    def __init__(self, hdf5_file: Path, transforms: List[str], prohibited_classes: List[int]):
         self.file = h5py.File(hdf5_file, 'r')
         offset = get_offset(self.file)
-        self.embeddings = self.file['embedding'][:offset]
+        embeddings = self.file['embedding'][:offset]
         ids = self.file['external_id'][:offset]
         assert ids[-1] != 0
-        self.ids = ids
-        self.classes = self.file['class'][:offset]
+        ids = ids
+        classes = self.file['class'][:offset]
         self.transforms = transforms
+        for prohib_classe in prohibited_classes:
+            embeddings = embeddings[np.where(classes != prohib_classe)]
+            ids = ids[np.where(classes != prohib_classe)]
+            classes = classes[np.where(classes != prohib_classe)]
+        self.embeddings = embeddings
+        self.ids = ids
+        self.classes = classes
         
     def __len__(self):
         return len(self.embeddings)
@@ -30,10 +37,10 @@ class LogoDataset(t_data.Dataset):
         class_arr[self.classes[idx]] = 1
         return embedding, class_arr, self.ids[idx]
 
-def get_datasets(train_path: Path, val_path: Path, test_path: Path, transforms : List[str]):
-    train_dataset = LogoDataset(train_path, transforms)
-    val_dataset = LogoDataset(val_path, transforms)
-    test_dataset = LogoDataset(test_path, transforms)
+def get_datasets(train_path: Path, val_path: Path, test_path: Path, transforms: List[str], prohibited_classes: List[int]):
+    train_dataset = LogoDataset(train_path, transforms, prohibited_classes)
+    val_dataset = LogoDataset(val_path, transforms, prohibited_classes)
+    test_dataset = LogoDataset(test_path, transforms, prohibited_classes)
 
     return train_dataset, val_dataset, test_dataset
 
@@ -77,7 +84,9 @@ def get_dataloader(train_path: Path,
                 transforms: List[str]=[],
                 num_threads: int=6,
                 loader_batch_size: int=32,
+                prohibited_classes: list=[],
                 debugging: bool=False,
+                test: bool=False,
                 ):
     """
     Returns the three dataloaders for training, validation and test.
@@ -92,13 +101,18 @@ def get_dataloader(train_path: Path,
     """
 
     # get train, val and test datasets
-    train_dataset, valid_dataset, test_dataset = get_datasets(train_path, val_path, test_path, transforms)
+    print("transforms", transforms)
+    print("prohibited_classes", prohibited_classes)
+    train_dataset, valid_dataset, test_dataset = get_datasets(train_path, val_path, test_path, transforms, prohibited_classes)
 
     # define samplers for train, val and test
     if debugging:
         test_weights = get_weights([test_dataset], loader_batch_size, num_threads)
         test_sampler = t_data.WeightedRandomSampler(weights=test_weights[0], num_samples=len(test_dataset))
         test_loader = t_data.DataLoader(dataset=test_dataset, batch_size=loader_batch_size, num_workers=num_threads, sampler=test_sampler)
+        return test_loader, test_loader, test_loader
+    elif test:
+        test_loader = t_data.DataLoader(dataset=test_dataset, batch_size=loader_batch_size, num_workers=num_threads)
         return test_loader, test_loader, test_loader
 
     train_weights = get_weights([train_dataset], loader_batch_size, num_threads)[0]
