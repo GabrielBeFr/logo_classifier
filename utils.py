@@ -14,12 +14,13 @@ def get_config(config_file: str):
     with  open('config.yaml') as f:
         return yaml.load(f, Loader=SafeLoader)
 
-def get_labels(labels_path: str):
+def get_labels(labels_path: str, prohibited_classes: list):
     ids = []
     str = []
     with open(labels_path, 'rb') as f:
         for row in f:
             dicti = json.loads(row)
+            if dicti["id"] in prohibited_classes : continue
             ids.append(dicti["id"])
             str.append(dicti["class"])
     return str, ids
