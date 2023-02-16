@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import wandb
-from utils import get_config, get_labels
+from utils import get_config, get_labels, add_json
 import pathlib
 from dataset import get_dataloader
 import tqdm
@@ -102,7 +102,7 @@ def train(files_dir: str, size_epoch = 10000, epochs: int=1, prohibited_classes:
         current_macro_f1 = compute_metrics(y_test, y_pred, classes_ids, classes_str, len(train_loader), len(val_loader), correct, total, train_loss, val_loss, epoch)
         
         save_best_model = SaveBestModel()
-        save_best_model(current_macro_f1, epoch, model, device, files_dir)
+        save_best_model(current_macro_f1, missed_logos, epoch, model, device, files_dir)
 
 def compute_metrics(y_test, y_pred, classes_ids, classes_str, len_train_loader, len_val_loader, correct, total, val_loss, train_loss, epoch):
     report = sklearn.metrics.classification_report(y_test, y_pred, labels=classes_ids, target_names=classes_str, zero_division=0)
@@ -166,7 +166,7 @@ class SaveBestModel:
         self.best_macro_f1 = best_macro_f1
         
     def __call__(
-        self, current_macro_f1, 
+        self, current_macro_f1, missed_logos,
         epoch, model, device,
         dir_path, batch_size = 32
     ):
@@ -184,12 +184,12 @@ class SaveBestModel:
                 output_names = ['scores_per_classes'],
                 dynamic_axes = {'embeddings':[0]}
                 )
-
+            add_json([missed_logos], dir_path+'/missed_logos.json')
 
 if __name__ == '__main__':
-    run = wandb.init(project="logos-classifier")
+    run = wandb.init(project="test-logos-classifier")
     files_dir = run.dir
     
     config = get_config("config.yaml")
-    train(files_dir=files_dir, size_epoch=1680, epochs=20, prohibited_classes=[], valid_no_class=False, debugging=False)
+    train(files_dir=files_dir, size_epoch=1680, epochs=5, prohibited_classes=[], valid_no_class=False, debugging=True)
     run.finish()
