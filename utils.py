@@ -3,6 +3,7 @@ from yaml.loader import SafeLoader
 import h5py
 import numpy as np
 import json
+from typing import List
 
 def get_offset(f: h5py.File) -> int:
     external_id_dset = f["external_id"]
@@ -24,3 +25,9 @@ def get_labels(labels_path: str, prohibited_classes: list):
             ids.append(dicti["id"])
             str.append(dicti["class"])
     return str, ids
+
+def add_json(list_dict_to_append: list[dict], json_file: str):
+    for dict in list_dict_to_append:
+        with open(json_file, 'w') as f:
+            json.dump(dict, f)
+            f.write('\n') 
