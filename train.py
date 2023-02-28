@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import wandb
-from utils import get_config, get_labels, add_json
+from utils import get_config, get_labels, add_jsonl
 import pathlib
 from dataset import get_dataloader
 import tqdm
@@ -9,11 +9,12 @@ import sklearn.metrics
 from sklearn.preprocessing import normalize
 import matplotlib.pyplot as plt
 import numpy as np
+import settings
 
 class LinearClassifier(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
+        self.linear = nn.Linear(input_dim, output_dim)  # Simple linear model.
         
     def forward(self, x):
         x = self.linear(x)
@@ -27,7 +28,7 @@ def train(files_dir: str, size_epoch = 10000, epochs: int=1, prohibited_classes:
 
     # get dataloaders
     train_path = pathlib.Path("datasets/train_dataset.hdf5")
-    val_path = pathlib.Path("datasets/val_dataset.hdf5")
+    val_path = pathlib.Path("datasets/test-val_dataset.hdf5")
     test_path = pathlib.Path("datasets/test_dataset.hdf5")
     train_loader, val_loader, test_loader = get_dataloader(train_path, val_path, test_path, prohibited_classes = prohibited_classes, debugging = debugging)
 
@@ -44,13 +45,14 @@ def train(files_dir: str, size_epoch = 10000, epochs: int=1, prohibited_classes:
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     # define proba function
-    softmax = nn.Softmax(dim=1)
+    softmax = nn.Softmax(dim=1)  # The softmax function is ONLY used to compute 
+                                 # scores for the missed_logos.json file. 
 
     # define lists for metrics
     y_train = []
     y_test = []
     y_pred = []
-    classes_str, classes_ids = get_labels("datasets/class_infos.jsonl", prohibited_classes=prohibited_classes)
+    classes_str, classes_ids = get_labels(settings.labels_path, prohibited_classes=prohibited_classes)
 
     # training loop
     for epoch in range(epochs):
@@ -76,7 +78,7 @@ def train(files_dir: str, size_epoch = 10000, epochs: int=1, prohibited_classes:
         val_loss = 0.0
         correct = 0
         total = 0
-        missed_logos = {}
+        missed_no_logos = {}
         y_test = []
         y_pred = []
         with torch.no_grad():
@@ -89,12 +91,14 @@ def train(files_dir: str, size_epoch = 10000, epochs: int=1, prohibited_classes:
                 total += labels.size(0)
                 ground_truth = torch.tensor([torch.where(classe==1)[0] for classe in labels])
                 correct += (predicted == ground_truth.to(device)).sum().item()
+                scores = softmax(outputs)
                 for indice in torch.where((predicted == ground_truth.to(device))==False)[0].tolist():
-                    missed_logos[str(ids[indice].item())]=[ground_truth[indice].item(),predicted[indice].item()]
+                    missed_no_logos[str(ids[indice].item())]=[ground_truth[indice].item(), predicted[indice].item(), scores[indice][predicted[indice]].item()]
 
-                # to compute the metrics, we take out all no_class logos (not the ones predicted as no_class but the true no_class)
-                predicted = predicted[torch.where(ground_truth!=0)]
-                ground_truth = ground_truth[torch.where(ground_truth!=0)]
+                if not valid_no_class:  # To compute the metrics, we take out all no_class logos 
+                                        # (not the ones predicted as no_class but the true no_class)                
+                    predicted = predicted[torch.where(ground_truth!=0)]
+                    ground_truth = ground_truth[torch.where(ground_truth!=0)]
                 y_pred += predicted.tolist()
                 y_test += ground_truth.tolist()
 
@@ -102,9 +106,11 @@ def train(files_dir: str, size_epoch = 10000, epochs: int=1, prohibited_classes:
         current_macro_f1 = compute_metrics(y_test, y_pred, classes_ids, classes_str, len(train_loader), len(val_loader), correct, total, train_loss, val_loss, epoch)
         
         save_best_model = SaveBestModel()
-        save_best_model(current_macro_f1, missed_logos, epoch, model, device, files_dir)
+        save_best_model(current_macro_f1, missed_no_logos, epoch, model, device, files_dir)
 
 def compute_metrics(y_test, y_pred, classes_ids, classes_str, len_train_loader, len_val_loader, correct, total, val_loss, train_loss, epoch):
+
+    # Compute all metrics. Report contains all relevant data.
     report = sklearn.metrics.classification_report(y_test, y_pred, labels=classes_ids, target_names=classes_str, zero_division=0)
     f1_micro = sklearn.metrics.f1_score(y_true=y_test, y_pred=y_pred, labels = classes_ids, average="micro")
     f1_macro = sklearn.metrics.f1_score(y_true=y_test, y_pred=y_pred, labels = classes_ids, average="macro", zero_division=0)
@@ -112,8 +118,7 @@ def compute_metrics(y_test, y_pred, classes_ids, classes_str, len_train_loader, 
     total_accuracy = 100 * correct / total
     training_loss = train_loss / len_train_loader
     validation_loss = val_loss / len_val_loader
-    confusion_matrix = sklearn.metrics.confusion_matrix(y_test, y_pred)
-    confusion_matrix = normalize(confusion_matrix, axis=1)
+
     metrics_dict = {
         "epoch": epoch + 1,
         "f1_micro": f1_micro,
@@ -126,6 +131,10 @@ def compute_metrics(y_test, y_pred, classes_ids, classes_str, len_train_loader, 
     for i in range(len(f1_classes)):
         metrics_dict["f1 by class/f1_" + str(classes_str[i])] = f1_classes[i]
     wandb.log(metrics_dict)
+
+    # The confusion matrix is displayed in wandb.
+    confusion_matrix = sklearn.metrics.confusion_matrix(y_test, y_pred)
+    confusion_matrix = normalize(confusion_matrix, axis=1)
 
     print(f"report: {report}")
     print(f"confusion_matrix: {confusion_matrix}")
@@ -156,9 +165,9 @@ def compute_metrics(y_test, y_pred, classes_ids, classes_str, len_train_loader, 
 
 class SaveBestModel:
     """
-    Class to save the best model while training. If the current epoch's 
-    macro f1 is better than the previous best, then save the
-    model state.
+    Class to save the best model and the wrong_predictions while training. 
+    If the current epoch's macro f1 is better than the previous best, 
+    then save the model state.
     """
     def __init__(
         self, best_macro_f1=-float('inf')
@@ -184,12 +193,27 @@ class SaveBestModel:
                 output_names = ['scores_per_classes'],
                 dynamic_axes = {'embeddings':[0]}
                 )
-            add_json([missed_logos], dir_path+'/missed_logos.json')
+            add_jsonl([missed_logos], dir_path+'/missed_logos.json')
 
 if __name__ == '__main__':
-    run = wandb.init(project="test-logos-classifier")
+    '''
+    Script used to train the logos classifier model.
+
+    Give a name to the wandb project.
+    Check the settings.py file for each file and parameters to be well defined.
+    Configure the parameters of the train function:
+        * size_epoch: amount of batches corresponding to one epoch of the training.
+        * epochs: amount of epochs run for training
+        * prohibited_classes: list of the ids of classes you want to prohibit for training, validation and test
+        * valid_no_class: True if you want no_class logos to be taking into account for the computation 
+        of metrics during validation step. False else.
+        * debugging: True if you want to run the script by using test dataset as train and val, as it is shorter
+        than the former. False for usual use.
+    Run the script !
+    '''
+
+
+    run = wandb.init(project="with_no_class-logos-classifier")
     files_dir = run.dir
-    
-    config = get_config("config.yaml")
-    train(files_dir=files_dir, size_epoch=1680, epochs=5, prohibited_classes=[], valid_no_class=False, debugging=True)
+    train(files_dir=files_dir, size_epoch=1680, epochs=200, prohibited_classes=[], valid_no_class=True, debugging=False)
     run.finish()

@@ -3,7 +3,7 @@ from yaml.loader import SafeLoader
 import h5py
 import numpy as np
 import json
-from typing import List
+import typing
 
 def get_offset(f: h5py.File) -> int:
     external_id_dset = f["external_id"]
@@ -26,8 +26,24 @@ def get_labels(labels_path: str, prohibited_classes: list):
             str.append(dicti["class"])
     return str, ids
 
-def add_json(list_dict_to_append: list[dict], json_file: str):
+def add_jsonl(list_dict_to_append: list, json_file: str):
     for dict in list_dict_to_append:
         with open(json_file, 'w') as f:
             json.dump(dict, f)
             f.write('\n') 
+
+def read_json(json_file: str):
+    with open(json_file, 'rb') as f:
+        for row in f:
+            yield json.loads(row)
+
+def get_str_labels(query_ids: list, labels_ids: np.array, labels_str: np.array):
+    res = []
+    for id in query_ids:
+        res.append(labels_str[np.where(labels_ids == id)][0])
+    return res
+        
+if __name__ == "__main__":
+    data_gen = read_json("test.jsonl")
+    for dict in data_gen:
+        print(dict)
